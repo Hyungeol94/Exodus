@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3'
 import path from 'path'
+import fs from 'fs'
 
 // 타입 정의: 투표 타입
 export type VoteType = 'jjajang' | 'jjamppong'
@@ -18,8 +19,16 @@ export interface VoteCount {
   jjamppong: number
 }
 
-// DB 파일 경로 설정
-const dbPath = path.join(process.cwd(), 'voting.db')
+// 데이터 저장용 폴더 경로 (Docker 내부에서는 /app/data가 됨)
+const dataDir = path.join(process.cwd(), 'data')
+
+// 폴더가 없으면 생성 (이게 없으면 에러 남)
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true })
+}
+
+// DB 파일 경로를 data 폴더 내부로 설정
+const dbPath = path.join(dataDir, 'voting.db')
 
 // DB 인스턴스 생성 (싱글톤 패턴)
 const db = new Database(dbPath)
