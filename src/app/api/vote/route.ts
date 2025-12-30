@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getVoteCounts, hasRecentVote, insertVote, type VoteType } from '@/lib/db'
+import { getVoteCounts, insertVote, type VoteType } from '@/lib/db'
 
 // 타입 정의: POST 요청 바디
 interface VoteRequestBody {
@@ -99,16 +99,7 @@ export async function POST(request: NextRequest) {
     // IP 주소 추출
     const ipAddress = extractIpAddress(request)
     
-    // 중복 투표 확인 (최근 1분 내)
-    if (hasRecentVote(ipAddress)) {
-      return createErrorResponse(
-        'DUPLICATE_VOTE',
-        '최근 1분 내에 이미 투표하셨어요. 잠시 후 다시 시도해주세요',
-        429
-      )
-    }
-    
-    // 투표 삽입
+    // 투표 삽입 (중복 투표 체크 해제됨)
     insertVote(body.type, ipAddress)
     
     // 업데이트된 투표 집계 반환
