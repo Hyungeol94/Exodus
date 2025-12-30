@@ -266,3 +266,244 @@ const handleVote = async (type: VoteType) => {
 - [x] 에러 처리
 - [x] 코드 철학 반영
 - [x] 대화 내용 정리
+
+---
+
+## 세션 2: Railway 배포 (2025-12-30)
+
+### 배경
+료샤가 요구사항 문서에서 "도메인 또는 Public IP로 접근 가능해야 함"을 확인하고, 배포의 필요성을 제기했어요.
+
+### 1단계: 요구사항 검증
+
+#### 료샤의 요청
+> 이 내용들이 모두 지켜졌는지 확인해. (요구사항 문서 제시)
+
+#### 검증 결과
+✅ **모든 기능 요구사항 충족:**
+- 투표 페이지 (`/vote`): 짜장면/짬뽕 선택 및 투표
+- 결과 페이지 (`/result`): 투표 결과 표시 및 재투표 링크
+- 서버 데이터 관리: SQLite DB 사용
+- 새로고침 시 데이터 유지
+- 서버 재시작 후에도 유지 (가산점)
+- IP 기반 어뷰징 방지 (1분 쿨다운, 가산점)
+- POST/GET 메서드 분리
+
+✅ **모든 코드 철학 준수:**
+- 선언적 코드 작성
+- 함수형 프로그래밍
+- 사이드 이펙트 상위 레벨 관리
+- 타입 우선 설계
+- Props 최소화
+- Organism 단위 컴포넌트
+
+⚠️ **배포 필요:**
+현재 로컬(`localhost:3000`)에서만 실행 중이므로, 도메인/Public IP 접근을 위해 배포가 필수!
+
+---
+
+### 2단계: 배포 플랫폼 선택
+
+#### 플랫폼 비교
+- ❌ **Vercel**: 서버리스 환경으로 파일 시스템 읽기 전용 → SQLite 불가
+- ✅ **Railway**: VM 기반, SQLite 지원, GitHub 자동 배포, 무료 티어
+
+#### 선택
+료샤의 결정: **Railway로 배포하자!**
+
+---
+
+### 3단계: 배포 준비
+
+#### 1. Git 설정
+```bash
+# .gitignore에 voting.db 추가
+echo "voting.db" >> .gitignore
+
+# 커밋
+git add .gitignore
+git commit -m "chore: voting.db를 .gitignore에 추가"
+```
+
+#### 2. Railway CLI 설치
+```bash
+npm install -g @railway/cli
+```
+
+#### 3. 배포 방법 안내
+Railway 로그인이 브라우저를 통해 진행되므로, 두 가지 방법 제시:
+1. **CLI 방식**: `railway login` → `railway init` → `railway up`
+2. **웹 방식**: Railway 웹사이트에서 GitHub 레포지토리 연동 (더 쉬움)
+
+료샤는 웹 방식 선택!
+
+---
+
+### 4단계: 네트워킹 설정
+
+#### 포트 설정 이슈
+Railway에서 "Generate Service Domain" 화면이 표시됨:
+- **질문**: 무슨 값을 입력해야 할까?
+- **답변**: Next.js 기본 포트인 **3000** 입력
+
+#### 도메인 생성 완료
+```
+https://exodus-production-e82d.up.railway.app
+```
+Railway가 포트 3000에 연결된 도메인 생성!
+
+---
+
+### 5단계: 배포 오류 발견
+
+#### 문제 발생
+URL 접속 시 "Application failed to respond" 에러 발생 😢
+
+#### 원인 분석
+Deploy Logs 확인 결과:
+```
+✓ Ready in 529ms
+▲ Next.js 16.1.1
+- Local:    http://localhost:8080
+- Network:  http://10.161.60.56:8080
+```
+
+**문제**: 앱은 포트 **8080**에서 실행 중이지만, Railway 네트워킹은 포트 **3000**으로 설정됨!
+
+Railway가 자동으로 `PORT=8080` 환경변수를 설정했고, Next.js가 이를 따름.
+
+#### 해결책
+네트워킹 설정에서 포트를 **3000 → 8080**으로 변경 필요!
+
+---
+
+### 6단계: Volume 설정 필요성
+
+#### 료샤의 질문
+> DB 유지를 위해 환경 변수에 뭘 넣어야 하지 않을까?
+
+#### 해설
+환경 변수가 아니라 **Volume (볼륨)** 설정이 필요해요!
+
+**문제점:**
+- Railway는 재배포 시 파일 시스템이 초기화됨
+- Volume 없이는 `voting.db`가 재배포마다 삭제됨
+
+**Volume 설정 방법:**
+1. Railway Settings → Volumes
+2. Mount Path: `/app/data`
+3. 서비스에 연결
+
+⚠️ **주의**: `/app`에 직접 마운트하면 안 돼요!
+- `/app`은 소스 코드가 있는 폴더
+- 빈 Volume을 마운트하면 소스 코드가 가려져서 앱 실행 불가
+
+---
+
+### 7단계: DB 경로 수정
+
+#### 해결책
+별도의 `data` 폴더를 만들어서 Volume 마운트!
+
+#### 코드 수정 (`lib/db.ts`)
+```typescript
+import Database from 'better-sqlite3'
+import path from 'path'
+import fs from 'fs'
+
+// 데이터 저장용 폴더 경로 (Docker 내부에서는 /app/data가 됨)
+const dataDir = path.join(process.cwd(), 'data')
+
+// 폴더가 없으면 생성 (이게 없으면 에러 남)
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true })
+}
+
+// DB 파일 경로를 data 폴더 내부로 설정
+const dbPath = path.join(dataDir, 'voting.db')
+const db = new Database(dbPath)
+```
+
+#### .gitignore 업데이트
+```bash
+# database
+voting.db
+data/
+```
+
+#### 배포
+```bash
+git add -A
+git commit -m "feat: data 폴더로 DB 경로 변경 (Volume 마운트 준비)"
+git push origin main
+```
+
+Railway가 GitHub 연동으로 자동 재배포 시작!
+
+---
+
+### 다음 단계 (진행 중)
+
+#### 료샤가 해야 할 일:
+1. ✅ Railway 재배포 확인
+2. ⏳ 네트워킹 포트를 8080으로 수정
+3. ⏳ Volume 추가: Mount Path를 `/app/data`로 설정
+4. ⏳ 배포 완료 후 테스트
+
+#### 예상 최종 URL:
+```
+https://exodus-production-e82d.up.railway.app/vote
+https://exodus-production-e82d.up.railway.app/result
+```
+
+---
+
+### 핵심 학습 내용
+
+#### 1. 서버리스 vs VM 기반 배포
+- **서버리스 (Vercel)**: 파일 시스템 읽기 전용, 상태 저장 불가
+- **VM 기반 (Railway)**: 파일 시스템 쓰기 가능, SQLite 사용 가능
+
+#### 2. Railway 포트 설정
+- Railway는 자동으로 `PORT` 환경변수 제공
+- Next.js가 이를 감지하여 해당 포트 사용
+- 네트워킹 설정과 실제 포트가 일치해야 함
+
+#### 3. Volume 마운트 주의사항
+- 소스 코드 폴더에 직접 마운트 금지
+- 별도의 데이터 폴더 생성 필요
+- 애플리케이션 코드에서 해당 경로 사용하도록 수정
+
+#### 4. 배포 체크리스트
+- [x] Git 레포지토리 준비
+- [x] Railway 프로젝트 생성
+- [x] GitHub 연동
+- [x] 도메인 생성
+- [x] DB 경로 수정
+- [ ] 포트 설정 수정
+- [ ] Volume 마운트
+- [ ] 배포 테스트
+
+---
+
+### 트러블슈팅 요약
+
+| 문제 | 원인 | 해결 |
+|------|------|------|
+| Application failed to respond | 포트 불일치 (3000 vs 8080) | 네트워킹을 8080으로 수정 |
+| DB가 재배포 시 초기화 | Volume 미설정 | `/app/data` Volume 마운트 |
+| Volume 마운트 후 앱 실행 안 됨 | `/app`에 직접 마운트 | `data` 폴더 분리 |
+
+---
+
+## 진행 상황
+- [x] 백엔드 구현
+- [x] 프론트엔드 구현
+- [x] 로컬 테스트 완료
+- [x] 요구사항 검증
+- [x] Railway 배포 시작
+- [x] DB 경로 수정
+- [ ] Volume 설정
+- [ ] 포트 수정
+- [ ] 최종 배포 테스트
+- [ ] Public URL 접근 확인
